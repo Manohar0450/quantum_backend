@@ -1,0 +1,22 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Local env files (Crucial: keeps your MongoDB password secret)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS related files
+.DS_Store
+Thumbs.db
+
+# Vercel specific
+.vercel
