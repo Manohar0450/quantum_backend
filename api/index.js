@@ -9,35 +9,32 @@ const nodemailer = require('nodemailer');
 dotenv.config();
 const app = express();
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 
 // --- CONFIGURATION ---
 const JWT_SECRET = process.env.JWT_SECRET || "quantum_secret_2026";
 
-// --- NODEMAILER CONFIG ---
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS 
-    }
-});
-
-// --- CONNECTION CACHING ---
+// --- CONNECTION CACHING (Critical for Vercel) ---
 let isConnected = false;
 const connectToDB = async () => {
     if (isConnected) return;
     try {
+        // Ensure MONGO_URI exists to prevent immediate crash
+        if (!process.env.MONGO_URI) {
+            throw new Error("MONGO_URI is not defined in Environment Variables");
+        }
         await mongoose.connect(process.env.MONGO_URI);
         isConnected = true;
         console.log("✅ Quantum Care DB Connected");
     } catch (err) {
-        console.log("❌ Connection Error:", err);
+        console.error("❌ Connection Error:", err.message);
+        throw err; // Re-throw to be caught by the route handler
     }
 };
 
-// --- USER SCHEMA WITH OTP ---
+// --- USER SCHEMA ---
 const UserSchema = new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
@@ -60,15 +57,19 @@ const User = mongoose.models.User || mongoose.model('User', UserSchema);
 
 // --- ROUTES ---
 
+// Base Route
+app.get('/', (req, res) => res.send("Quantum Care API is Live! Created by Manohar."));
+
 // 1. REGISTER WITH OTP
 app.post('/register', async (req, res) => {
-    await connectToDB();
     try {
-        // Note: Flutter code uses query params for register
+        await connectToDB();
+        
+        // Reading from query params to match your Flutter ApiService
         const { name, email, password } = req.query;
         
         if (!name || !email || !password) {
-            return res.status(400).json({ error: "Missing fields" });
+            return res.status(400).json({ error: "Missing name, email, or password in query parameters" });
         }
 
         let user = await User.findOne({ email });
@@ -82,14 +83,12 @@ app.post('/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         if (user && !user.isVerified) {
-            // Update existing unverified user
             user.name = name;
             user.password = hashedPassword;
             user.otp = otp;
             user.otpExpires = otpExpires;
             await user.save();
         } else {
-            // Create new unverified user
             user = new User({
                 name, email, password: hashedPassword,
                 otp, otpExpires, isVerified: false
@@ -97,31 +96,41 @@ app.post('/register', async (req, res) => {
             await user.save();
         }
 
-        // Send Email
+        // Initialize Transporter inside the route to prevent global crashes
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS 
+            }
+        });
+
         const mailOptions = {
             from: process.env.EMAIL_USER,
             to: email,
             subject: 'Quantum Care - Verify Your Account',
             html: `<h2>Welcome to Quantum Care!</h2>
                    <p>Your verification code is: <b>${otp}</b></p>
-                   <p>This code expires in 10 minutes.</p>`
+                   <p>This code expires in 10 minutes.</p>
+                   <p>Regards,<br>Manohar Nallamsetty</p>`
         };
 
         await transporter.sendMail(mailOptions);
         res.status(200).json({ message: "OTP sent to email" });
 
     } catch (err) {
+        console.error("Register Error:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
 // 2. VERIFY OTP
 app.post('/verify-otp', async (req, res) => {
-    await connectToDB();
     try {
+        await connectToDB();
         const { email, otp } = req.body;
+        
         const user = await User.findOne({ email });
-
         if (!user) return res.status(404).json({ error: "User not found" });
 
         if (user.otp === otp && user.otpExpires > Date.now()) {
@@ -138,13 +147,13 @@ app.post('/verify-otp', async (req, res) => {
     }
 });
 
-// 3. LOGIN (Checks isVerified)
+// 3. LOGIN
 app.post('/login', async (req, res) => {
-    await connectToDB();
     try {
+        await connectToDB();
         const { email, password } = req.query;
+        
         const user = await User.findOne({ email });
-
         if (!user) return res.status(401).json({ error: "User not found" });
         if (!user.isVerified) return res.status(403).json({ error: "Please verify your email first" });
 
